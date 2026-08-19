@@ -3,6 +3,8 @@ import React, { useState, useEffect, useMemo } from "react";
 /* ============================================================
    TPM GUAYANA — Optimizador de Mantenimiento Preventivo
    Talleres y pequeñas plantas · Ciudad Guayana, Venezuela
+   VERSIÓN 2: causas de parada, Pareto, tendencia OEE,
+   exportación CSV, ayuda contextual, guía e interpretación.
    OEE = Disponibilidad × Rendimiento × Calidad
    ============================================================ */
 
@@ -28,6 +30,16 @@ const body = "'IBM Plex Sans', system-ui, sans-serif";
 const mono = "'IBM Plex Mono', Consolas, monospace";
 
 const STORAGE_KEY = "tpm-guayana-datos";
+
+const CAUSAS_PARADA = [
+  "Falla mecánica",
+  "Falla eléctrica",
+  "Falta de material",
+  "Corte de energía",
+  "Ajuste / cambio de producto",
+  "Falta de operario",
+  "Otra",
+];
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const hoy = () => new Date().toISOString().slice(0, 10);
@@ -61,6 +73,46 @@ function colorOEE(oee) {
   return T.danger;
 }
 
+/* ---------- interpretación automática del OEE ---------- */
+function interpretarOEE(res) {
+  if (!Number.isFinite(res.oee)) return null;
+  const o = res.oee;
+  let nivel;
+  if (o >= 0.85) nivel = "Nivel de clase mundial: la máquina aprovecha casi todo su potencial.";
+  else if (o >= 0.6) nivel = "Nivel aceptable, pero con margen claro de mejora.";
+  else if (o >= 0.4) nivel = "Nivel bajo: es el rango típico de talleres sin gestión formal de mantenimiento.";
+  else nivel = "Nivel crítico: la máquina pierde más de la mitad de su capacidad productiva.";
+
+  const comps = [
+    { n: "Disponibilidad", v: res.disp, msg: "la mayor pérdida fueron las PARADAS. Revisa las causas de parada de este turno y prioriza reducirlas." },
+    { n: "Rendimiento", v: res.rend, msg: "la mayor pérdida fue la VELOCIDAD: la máquina produjo más lento que su ritmo ideal (microparadas, ritmo reducido)." },
+    { n: "Calidad", v: res.cal, msg: "la mayor pérdida fueron los DEFECTOS: revisa ajustes, herramientas o materia prima." },
+  ].filter((c) => Number.isFinite(c.v));
+  if (!comps.length) return nivel;
+  const peor = comps.reduce((a, b) => (b.v < a.v ? b : a));
+  return `${nivel} El factor más débil fue ${peor.n} (${pct(peor.v)}): ${peor.msg}`;
+}
+
+/* ---------- exportación CSV (formato Excel en español: ; y coma decimal) ---------- */
+function descargarCSV(nombreArchivo, filas) {
+  const esc = (v) => {
+    if (v === null || v === undefined) return "";
+    let s = typeof v === "number" ? String(v).replace(".", ",") : String(v);
+    if (s.includes(";") || s.includes('"') || s.includes("\n")) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const csv = "\uFEFF" + filas.map((f) => f.map(esc).join(";")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombreArchivo;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 /* ---------- franja de seguridad (firma visual) ---------- */
 const Franja = ({ color }) => (
   <div
@@ -75,11 +127,47 @@ const Franja = ({ color }) => (
   />
 );
 
+/* ---------- ayuda contextual: icono ⓘ con explicación desplegable ---------- */
+function Ayuda({ texto }) {
+  const [abierta, setAbierta] = useState(false);
+  return (
+    <span style={{ position: "relative", display: "inline-block" }}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setAbierta(!abierta); }}
+        aria-label="Ayuda"
+        style={{
+          width: 18, height: 18, borderRadius: 9, border: `1.5px solid ${T.steel}`,
+          background: abierta ? T.steel : "transparent", color: abierta ? "#fff" : T.steel,
+          fontSize: 11, fontWeight: 700, lineHeight: "15px", cursor: "pointer",
+          marginLeft: 5, padding: 0, verticalAlign: "middle", fontFamily: body,
+        }}
+      >
+        i
+      </button>
+      {abierta && (
+        <span
+          onClick={() => setAbierta(false)}
+          style={{
+            position: "absolute", zIndex: 40, top: 22, left: -80, width: 230,
+            background: T.ink, color: "#fff", padding: "10px 12px", borderRadius: 8,
+            fontSize: 12, fontWeight: 400, lineHeight: 1.45, fontFamily: body,
+            textTransform: "none", letterSpacing: "normal", boxShadow: "0 4px 14px rgba(0,0,0,0.3)",
+            borderLeft: `4px solid ${T.orange}`, cursor: "pointer", display: "block", textAlign: "left",
+          }}
+        >
+          {texto}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /* ---------- componentes de UI básicos ---------- */
-const Field = ({ label, children }) => (
+const Field = ({ label, ayuda, children }) => (
   <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 130 }}>
     <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.inkSoft }}>
       {label}
+      {ayuda && <Ayuda texto={ayuda} />}
     </span>
     {children}
   </label>
@@ -125,6 +213,25 @@ const btnGhost = (color) => ({
   textTransform: "uppercase",
   cursor: "pointer",
 });
+
+const h2Style = {
+  fontFamily: display,
+  fontSize: 22,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  margin: "0 0 10px",
+  borderBottom: `3px solid ${T.orange}`,
+  display: "inline-block",
+  paddingBottom: 2,
+};
+
+const Dato = ({ etiqueta, valor, color }) => (
+  <div>
+    <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: T.inkSoft, fontFamily: body }}>{etiqueta}</div>
+    <div style={{ fontWeight: 600, color: color || T.ink }}>{valor}</div>
+  </div>
+);
 
 /* ============================================================ */
 
@@ -219,7 +326,9 @@ export default function TPMGuayana() {
     ["tablero", "Tablero"],
     ["maquinas", "Máquinas"],
     ["oee", "Registrar OEE"],
+    ["analisis", "Análisis"],
     ["historial", "Historial"],
+    ["guia", "Guía"],
   ];
 
   return (
@@ -251,7 +360,7 @@ export default function TPMGuayana() {
                 key={k}
                 onClick={() => setTab(k)}
                 style={{
-                  padding: "10px 16px",
+                  padding: "10px 14px",
                   background: tab === k ? T.bg : "transparent",
                   color: tab === k ? T.ink : "#C3CDD8",
                   border: "none",
@@ -298,14 +407,16 @@ export default function TPMGuayana() {
           />
         )}
         {tab === "oee" && <FormOEE maquinas={maquinas} onGuardar={guardarOEE} />}
+        {tab === "analisis" && <Analisis maquinas={maquinas} registros={registros} eventos={eventos} />}
         {tab === "historial" && <Historial maquinas={maquinas} registros={registros} eventos={eventos} />}
+        {tab === "guia" && <Guia />}
       </main>
     </div>
   );
 }
 
 /* ============================================================
-   TABLERO
+   TABLERO (con bienvenida para usuarios nuevos)
    ============================================================ */
 function Tablero({ maquinas, registros, alertas, irA }) {
   const oeePorMaquina = (id) => {
@@ -317,14 +428,31 @@ function Tablero({ maquinas, registros, alertas, irA }) {
 
   if (!maquinas.length)
     return (
-      <div style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 32, textAlign: "center" }}>
-        <p style={{ fontFamily: display, fontSize: 24, fontWeight: 600, margin: "0 0 8px", textTransform: "uppercase" }}>
-          Sin máquinas registradas
+      <div style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: "28px 24px" }}>
+        <p style={{ fontFamily: display, fontSize: 26, fontWeight: 700, margin: "0 0 6px", textTransform: "uppercase" }}>
+          Bienvenido a TPM Guayana
         </p>
-        <p style={{ color: T.inkSoft, margin: "0 0 18px" }}>
-          Agrega la primera máquina del taller para empezar a seguir sus horas y su OEE.
+        <p style={{ color: T.inkSoft, margin: "0 0 18px", maxWidth: 560 }}>
+          Esta herramienta te ayuda a cuidar las máquinas de tu taller: mide cuánto producen de verdad
+          (el indicador OEE) y te avisa cuándo toca el mantenimiento preventivo, antes de que la máquina falle.
         </p>
-        <button style={btn(T.orange)} onClick={() => irA("maquinas")}>Agregar máquina</button>
+        {[
+          ["1", "Registra tus máquinas", "Ve a la pestaña MÁQUINAS y agrega cada equipo con su intervalo de mantenimiento (cada cuántas horas de uso toca el preventivo)."],
+          ["2", "Registra el trabajo de cada día", "Al final de cada turno: anota las horas trabajadas de la máquina y llena el formulario de REGISTRAR OEE con la producción del turno."],
+          ["3", "Deja que la app te guíe", "El TABLERO te mostrará alertas de mantenimiento en semáforo (verde/amarillo/rojo) y la pestaña ANÁLISIS te dirá dónde estás perdiendo producción."],
+        ].map(([n, t, d]) => (
+          <div key={n} style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "flex-start" }}>
+            <div style={{ width: 30, height: 30, borderRadius: 15, background: T.orange, color: "#fff", fontFamily: display, fontWeight: 700, fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</div>
+            <div>
+              <strong style={{ fontFamily: display, fontSize: 17, textTransform: "uppercase" }}>{t}</strong>
+              <div style={{ fontSize: 13, color: T.inkSoft }}>{d}</div>
+            </div>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
+          <button style={btn(T.orange)} onClick={() => irA("maquinas")}>Empezar: agregar máquina</button>
+          <button style={btnGhost(T.steel)} onClick={() => irA("guia")}>Leer la guía completa</button>
+        </div>
       </div>
     );
 
@@ -332,7 +460,10 @@ function Tablero({ maquinas, registros, alertas, irA }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* alertas */}
       <section>
-        <h2 style={h2Style}>Alertas de mantenimiento</h2>
+        <h2 style={h2Style}>
+          Alertas de mantenimiento
+          <Ayuda texto="El semáforo compara las horas trabajadas desde el último mantenimiento con el intervalo definido para cada máquina. Verde: menos del 75% del intervalo. Amarillo (PRÓXIMO): entre 75% y 90%, planifica el mantenimiento. Rojo (URGENTE): 90% o más, hazlo cuanto antes para evitar una falla." />
+        </h2>
         {!alertas.length ? (
           <div style={{ display: "flex", background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, overflow: "hidden" }}>
             <Franja color={T.ok} />
@@ -363,7 +494,10 @@ function Tablero({ maquinas, registros, alertas, irA }) {
 
       {/* indicadores */}
       <section>
-        <h2 style={h2Style}>Indicadores por máquina</h2>
+        <h2 style={h2Style}>
+          Indicadores por máquina
+          <Ayuda texto="OEE: porcentaje del potencial de la máquina que realmente se aprovechó (clase mundial: 85% o más). MTBF: promedio de horas que la máquina trabaja entre una falla y la siguiente; mientras más alto, más confiable es el equipo." />
+        </h2>
         <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
           {maquinas.map((m) => {
             const e = estadoMaquina(m);
@@ -394,25 +528,6 @@ function Tablero({ maquinas, registros, alertas, irA }) {
   );
 }
 
-const h2Style = {
-  fontFamily: display,
-  fontSize: 22,
-  fontWeight: 700,
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  margin: "0 0 10px",
-  borderBottom: `3px solid ${T.orange}`,
-  display: "inline-block",
-  paddingBottom: 2,
-};
-
-const Dato = ({ etiqueta, valor, color }) => (
-  <div>
-    <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: T.inkSoft, fontFamily: body }}>{etiqueta}</div>
-    <div style={{ fontWeight: 600, color: color || T.ink }}>{valor}</div>
-  </div>
-);
-
 /* ============================================================
    MÁQUINAS
    ============================================================ */
@@ -440,7 +555,10 @@ function Maquinas({ maquinas, onAgregar, onHoras, onMant, onFalla, onEliminar })
           <Field label="Tipo">
             <input style={inputStyle} value={tipo} onChange={(e) => setTipo(e.target.value)} placeholder="Torno, prensa, compresor…" />
           </Field>
-          <Field label="Intervalo mant. (h)">
+          <Field
+            label="Intervalo mant. (h)"
+            ayuda="Cada cuántas horas de trabajo la máquina necesita mantenimiento preventivo. Búscalo en el manual del fabricante; si no lo tienes, empieza con 250 h (valor típico para equipos de taller) y ajústalo con la experiencia."
+          >
             <input style={inputStyle} type="number" min="1" value={intervalo} onChange={(e) => setIntervalo(e.target.value)} />
           </Field>
         </div>
@@ -475,6 +593,7 @@ function Maquinas({ maquinas, onAgregar, onHoras, onMant, onFalla, onEliminar })
                   + Horas trabajadas
                 </button>
                 <button style={btn(T.ok, true)} onClick={() => onMant(m.id)}>Mantenimiento hecho</button>
+                <Ayuda texto="'+ Horas trabajadas': suma las horas que la máquina operó (llénalo cada día o cada turno). 'Mantenimiento hecho': márcalo cuando se realice el preventivo; el contador del semáforo vuelve a cero y el evento queda en el historial." />
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
                 <input
@@ -499,25 +618,29 @@ function Maquinas({ maquinas, onAgregar, onHoras, onMant, onFalla, onEliminar })
 }
 
 /* ============================================================
-   FORMULARIO OEE
+   FORMULARIO OEE (con causa de parada e interpretación)
    ============================================================ */
 function FormOEE({ maquinas, onGuardar }) {
   const [maquinaId, setMaquinaId] = useState("");
-  const [f, setF] = useState({ tiempoPlan: "480", paradas: "0", piezas: "", defectuosas: "0", cicloIdeal: "" });
+  const [f, setF] = useState({ tiempoPlan: "480", paradas: "0", causa: "", piezas: "", defectuosas: "0", cicloIdeal: "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   const res = useMemo(() => calcOEE(f), [f]);
-  const listo = maquinaId && Number.isFinite(res.oee) && res.oee >= 0;
+  const hayParadas = +f.paradas > 0;
+  const faltaCausa = hayParadas && !f.causa;
+  const listo = maquinaId && Number.isFinite(res.oee) && res.oee >= 0 && !faltaCausa;
+  const interpretacion = interpretarOEE(res);
 
   const guardar = () => {
     if (!listo) return;
     onGuardar({
       maquinaId,
-      tiempoPlan: +f.tiempoPlan, paradas: +f.paradas, piezas: +f.piezas,
-      defectuosas: +f.defectuosas, cicloIdeal: +f.cicloIdeal,
+      tiempoPlan: +f.tiempoPlan, paradas: +f.paradas,
+      causa: hayParadas ? f.causa : "",
+      piezas: +f.piezas, defectuosas: +f.defectuosas, cicloIdeal: +f.cicloIdeal,
       disp: res.disp, rend: res.rend, cal: res.cal, oee: res.oee,
     });
-    setF({ ...f, paradas: "0", piezas: "", defectuosas: "0" });
+    setF({ ...f, paradas: "0", causa: "", piezas: "", defectuosas: "0" });
   };
 
   if (!maquinas.length)
@@ -526,7 +649,10 @@ function FormOEE({ maquinas, onGuardar }) {
   return (
     <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1fr", maxWidth: 720 }}>
       <section style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 16 }}>
-        <h2 style={h2Style}>Datos del turno</h2>
+        <h2 style={h2Style}>
+          Datos del turno
+          <Ayuda texto="Llena este formulario UNA VEZ por turno y por máquina, al final del turno. Con estos 5 datos la app calcula el OEE: cuánto del potencial de la máquina se aprovechó realmente." />
+        </h2>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
           <Field label="Máquina">
             <select style={inputStyle} value={maquinaId} onChange={(e) => setMaquinaId(e.target.value)}>
@@ -534,22 +660,47 @@ function FormOEE({ maquinas, onGuardar }) {
               {maquinas.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
             </select>
           </Field>
-          <Field label="Tiempo planificado (min)">
+          <Field
+            label="Tiempo planificado (min)"
+            ayuda="Minutos que la máquina DEBÍA trabajar en el turno, sin contar paradas programadas (almuerzo, limpieza planificada). Ejemplo: turno de 8 horas con 1 hora de almuerzo = 420 min."
+          >
             <input style={inputStyle} type="number" min="1" value={f.tiempoPlan} onChange={set("tiempoPlan")} />
           </Field>
-          <Field label="Paradas no planif. (min)">
+          <Field
+            label="Paradas no planif. (min)"
+            ayuda="Suma de los minutos que la máquina estuvo detenida SIN estar programado: averías, falta de material, cortes de energía, ajustes imprevistos, ausencia del operario."
+          >
             <input style={inputStyle} type="number" min="0" value={f.paradas} onChange={set("paradas")} />
           </Field>
-          <Field label="Piezas producidas">
+          {hayParadas && (
+            <Field
+              label="Causa principal de la parada"
+              ayuda="La causa que acumuló MÁS minutos de parada en el turno. Registrarla permite que la pestaña Análisis te muestre qué causa te está costando más producción (diagrama de Pareto)."
+            >
+              <select style={{ ...inputStyle, borderColor: faltaCausa ? T.danger : T.line }} value={f.causa} onChange={set("causa")}>
+                <option value="">Selecciona la causa…</option>
+                {CAUSAS_PARADA.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </Field>
+          )}
+          <Field label="Piezas producidas" ayuda="Total de unidades procesadas en el turno, contando buenas y defectuosas.">
             <input style={inputStyle} type="number" min="0" value={f.piezas} onChange={set("piezas")} placeholder="0" />
           </Field>
-          <Field label="Piezas defectuosas">
+          <Field label="Piezas defectuosas" ayuda="Unidades rechazadas o que hubo que retrabajar.">
             <input style={inputStyle} type="number" min="0" value={f.defectuosas} onChange={set("defectuosas")} />
           </Field>
-          <Field label="Ciclo ideal (min/pieza)">
+          <Field
+            label="Ciclo ideal (min/pieza)"
+            ayuda="Tiempo teórico para producir UNA pieza en condiciones perfectas. Cronométralo con la máquina a ritmo normal sin interrupciones (promedia 10 mediciones) o tómalo del fabricante. Ejemplo: 40 piezas/hora = 1,5 min/pieza. Usa siempre el mismo valor."
+          >
             <input style={inputStyle} type="number" min="0" step="0.01" value={f.cicloIdeal} onChange={set("cicloIdeal")} placeholder="1.50" />
           </Field>
         </div>
+        {faltaCausa && (
+          <p style={{ fontSize: 12, color: T.danger, margin: "10px 0 0" }}>
+            Registraste paradas: selecciona la causa principal para poder guardar.
+          </p>
+        )}
       </section>
 
       <section style={{ background: T.ink, color: "#fff", borderRadius: 8, padding: 16 }}>
@@ -572,6 +723,11 @@ function FormOEE({ maquinas, onGuardar }) {
             </div>
           </div>
         </div>
+        {interpretacion && (
+          <p style={{ fontSize: 13, color: "#DCE3EA", marginTop: 12, lineHeight: 1.5, borderLeft: `3px solid ${T.steel}`, paddingLeft: 10 }}>
+            {interpretacion}
+          </p>
+        )}
         {Number.isFinite(res.rend) && res.rend > 1.05 && (
           <p style={{ fontSize: 12, color: "#F2C94C", marginTop: 10 }}>
             Rendimiento &gt; 100 %: revisa el tiempo de ciclo ideal, probablemente está sobreestimado.
@@ -580,6 +736,176 @@ function FormOEE({ maquinas, onGuardar }) {
         <button style={{ ...btn(T.orange), marginTop: 14, opacity: listo ? 1 : 0.5 }} disabled={!listo} onClick={guardar}>
           Guardar registro
         </button>
+      </section>
+    </div>
+  );
+}
+
+/* ============================================================
+   ANÁLISIS: tendencia OEE + Pareto de causas + exportación
+   ============================================================ */
+function Analisis({ maquinas, registros, eventos }) {
+  const [maquinaId, setMaquinaId] = useState("todas");
+  const nombre = (id) => maquinas.find((m) => m.id === id)?.nombre || "—";
+
+  const regsFiltrados = useMemo(() => {
+    const rs = maquinaId === "todas" ? registros : registros.filter((r) => r.maquinaId === maquinaId);
+    return [...rs].reverse(); // cronológico: del más viejo al más nuevo
+  }, [registros, maquinaId]);
+
+  /* ---- Pareto de causas de parada (minutos por causa) ---- */
+  const pareto = useMemo(() => {
+    const acc = {};
+    regsFiltrados.forEach((r) => {
+      if (+r.paradas > 0) {
+        const c = r.causa || "(sin causa registrada)";
+        acc[c] = (acc[c] || 0) + +r.paradas;
+      }
+    });
+    const items = Object.entries(acc).sort((a, b) => b[1] - a[1]);
+    const total = items.reduce((s, [, v]) => s + v, 0);
+    let acum = 0;
+    return {
+      total,
+      items: items.map(([causa, min]) => {
+        acum += min;
+        return { causa, min, pctItem: total ? min / total : 0, pctAcum: total ? acum / total : 0 };
+      }),
+    };
+  }, [regsFiltrados]);
+
+  /* ---- exportaciones CSV ---- */
+  const num = (v, d = 4) => (Number.isFinite(v) ? +v.toFixed(d) : "");
+  const exportarRegistros = () => {
+    const filas = [
+      ["Fecha", "Máquina", "Tiempo planificado (min)", "Paradas (min)", "Causa principal", "Piezas producidas", "Piezas defectuosas", "Ciclo ideal (min/pieza)", "Disponibilidad", "Rendimiento", "Calidad", "OEE"],
+      ...[...registros].reverse().map((r) => [
+        r.fecha, nombre(r.maquinaId), r.tiempoPlan, r.paradas, r.causa || "", r.piezas, r.defectuosas, r.cicloIdeal,
+        num(r.disp), num(r.rend), num(r.cal), num(r.oee),
+      ]),
+    ];
+    descargarCSV(`tpm-registros-oee-${hoy()}.csv`, filas);
+  };
+  const exportarEventos = () => {
+    const filas = [
+      ["Fecha", "Máquina", "Tipo", "Nota"],
+      ...[...eventos].reverse().map((e) => [e.fecha, nombre(e.maquinaId), e.tipo, e.nota]),
+    ];
+    descargarCSV(`tpm-fallas-mantenimientos-${hoy()}.csv`, filas);
+  };
+  const exportarMaquinas = () => {
+    const filas = [
+      ["Máquina", "Tipo", "Intervalo mant. (h)", "Horas desde mant.", "Horas totales", "Fallas", "MTBF (h)"],
+      ...maquinas.map((m) => [
+        m.nombre, m.tipo, m.intervaloMant, num(m.horasDesdeMant, 1), num(m.horasTotales, 1), m.fallas,
+        m.fallas > 0 ? num(m.horasTotales / m.fallas, 1) : "",
+      ]),
+    ];
+    descargarCSV(`tpm-maquinas-${hoy()}.csv`, filas);
+  };
+
+  if (!registros.length)
+    return (
+      <div style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 24 }}>
+        <p style={{ fontFamily: display, fontSize: 22, fontWeight: 600, margin: "0 0 8px", textTransform: "uppercase" }}>Aún no hay datos que analizar</p>
+        <p style={{ color: T.inkSoft, margin: 0 }}>
+          Cuando guardes registros de OEE en la pestaña <strong>Registrar OEE</strong>, aquí verás la evolución del indicador
+          en el tiempo y el diagrama de Pareto con las causas de parada que más producción te cuestan.
+        </p>
+      </div>
+    );
+
+  /* ---- gráfico de tendencia (SVG, sin librerías) ---- */
+  const W = 640, H = 220, PAD = { l: 44, r: 12, t: 14, b: 26 };
+  const pts = regsFiltrados.filter((r) => Number.isFinite(r.oee));
+  const n = pts.length;
+  const x = (i) => PAD.l + (n <= 1 ? (W - PAD.l - PAD.r) / 2 : (i * (W - PAD.l - PAD.r)) / (n - 1));
+  const y = (v) => PAD.t + (1 - Math.min(Math.max(v, 0), 1.1) / 1.1) * (H - PAD.t - PAD.b);
+  const linea = pts.map((r, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(r.oee).toFixed(1)}`).join(" ");
+  const promedio = n ? pts.reduce((s, r) => s + r.oee, 0) / n : NaN;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* selector */}
+      <section style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 14, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.inkSoft }}>Analizar:</span>
+        <select style={{ ...inputStyle, width: "auto", minWidth: 180 }} value={maquinaId} onChange={(e) => setMaquinaId(e.target.value)}>
+          <option value="todas">Todas las máquinas</option>
+          {maquinas.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+        </select>
+        <span style={{ fontFamily: mono, fontSize: 13, color: T.inkSoft }}>
+          {n} registro{n === 1 ? "" : "s"} · OEE promedio: <strong style={{ color: colorOEE(promedio) }}>{pct(promedio)}</strong>
+        </span>
+      </section>
+
+      {/* tendencia */}
+      <section style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 16 }}>
+        <h2 style={h2Style}>
+          Tendencia del OEE
+          <Ayuda texto="Cada punto es un registro de turno, en orden cronológico. La línea verde punteada es la referencia de clase mundial (85%). Lo importante no es un punto aislado sino la dirección: ¿la línea sube con las semanas? Entonces el mantenimiento preventivo está funcionando." />
+        </h2>
+        <div style={{ overflowX: "auto" }}>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", minWidth: 460, display: "block" }} role="img" aria-label="Gráfico de tendencia del OEE">
+            {[0, 0.25, 0.5, 0.75, 1].map((v) => (
+              <g key={v}>
+                <line x1={PAD.l} y1={y(v)} x2={W - PAD.r} y2={y(v)} stroke={T.line} strokeWidth="1" />
+                <text x={PAD.l - 6} y={y(v) + 4} textAnchor="end" fontSize="11" fontFamily={mono} fill={T.inkSoft}>{(v * 100).toFixed(0)}%</text>
+              </g>
+            ))}
+            <line x1={PAD.l} y1={y(0.85)} x2={W - PAD.r} y2={y(0.85)} stroke={T.ok} strokeWidth="1.5" strokeDasharray="6 4" />
+            <text x={W - PAD.r} y={y(0.85) - 5} textAnchor="end" fontSize="11" fontFamily={mono} fill={T.ok}>meta 85%</text>
+            {n > 1 && <path d={linea} fill="none" stroke={T.steel} strokeWidth="2.5" />}
+            {pts.map((r, i) => (
+              <circle key={r.id || i} cx={x(i)} cy={y(r.oee)} r="4" fill={colorOEE(r.oee)} stroke="#fff" strokeWidth="1.5" />
+            ))}
+            {n > 0 && [pts[0], pts[n - 1]].map((r, k) => (
+              <text key={k} x={x(k === 0 ? 0 : n - 1)} y={H - 8} textAnchor={k === 0 ? "start" : "end"} fontSize="11" fontFamily={mono} fill={T.inkSoft}>{r.fecha}</text>
+            ))}
+          </svg>
+        </div>
+      </section>
+
+      {/* Pareto */}
+      <section style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 16 }}>
+        <h2 style={h2Style}>
+          Pareto de causas de parada
+          <Ayuda texto="Ordena las causas de parada de mayor a menor según los minutos que te costaron. El principio de Pareto dice que pocas causas concentran la mayoría de las pérdidas: ataca primero las barras más largas y el porcentaje acumulado te dice cuánto del problema resuelves." />
+        </h2>
+        {!pareto.items.length ? (
+          <p style={{ color: T.inkSoft, margin: 0 }}>No hay paradas registradas en esta selección. Cuando registres turnos con paradas y su causa, aquí aparecerá el análisis.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {pareto.items.map((it, i) => (
+              <div key={it.causa}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 3, gap: 8, flexWrap: "wrap" }}>
+                  <span><strong>{i + 1}.</strong> {it.causa}</span>
+                  <span style={{ fontFamily: mono, color: T.inkSoft }}>
+                    {fmt(it.min, 0)} min · {(it.pctItem * 100).toFixed(1)} % · acum. {(it.pctAcum * 100).toFixed(0)} %
+                  </span>
+                </div>
+                <div style={{ height: 16, background: T.bg, borderRadius: 4, border: `1px solid ${T.line}` }}>
+                  <div style={{ height: "100%", width: `${it.pctItem * 100}%`, background: i === 0 ? T.danger : i === 1 ? T.orange : T.steel, borderRadius: 4, minWidth: 2 }} />
+                </div>
+              </div>
+            ))}
+            <p style={{ fontSize: 12, color: T.inkSoft, margin: "4px 0 0" }}>
+              Total de minutos perdidos por paradas: <strong>{fmt(pareto.total, 0)} min</strong>. Prioriza atacar las primeras causas de la lista.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {/* exportación */}
+      <section style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 16 }}>
+        <h2 style={h2Style}>
+          Exportar datos
+          <Ayuda texto="Descarga los datos en formato CSV, que abre directamente en Excel. Úsalo para respaldar la información o para análisis estadísticos más profundos. El archivo queda en la carpeta de Descargas del dispositivo." />
+        </h2>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+          <button style={btn(T.steel, true)} onClick={exportarRegistros}>Registros OEE (Excel/CSV)</button>
+          <button style={btn(T.steel, true)} onClick={exportarEventos}>Fallas y mantenimientos</button>
+          <button style={btn(T.steel, true)} onClick={exportarMaquinas}>Resumen de máquinas</button>
+        </div>
       </section>
     </div>
   );
@@ -602,7 +928,7 @@ function Historial({ maquinas, registros, eventos }) {
             <table style={{ borderCollapse: "collapse", width: "100%", fontFamily: mono, fontSize: 13 }}>
               <thead>
                 <tr style={{ background: T.ink, color: "#fff", fontFamily: display, fontSize: 14, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                  {["Fecha", "Máquina", "Disp.", "Rend.", "Cal.", "OEE"].map((h) => (
+                  {["Fecha", "Máquina", "Paradas", "Causa", "Disp.", "Rend.", "Cal.", "OEE"].map((h) => (
                     <th key={h} style={{ padding: "8px 12px", textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -612,6 +938,8 @@ function Historial({ maquinas, registros, eventos }) {
                   <tr key={r.id} style={{ background: i % 2 ? "#F5F7F9" : "#fff" }}>
                     <td style={td}>{r.fecha}</td>
                     <td style={td}>{nombre(r.maquinaId)}</td>
+                    <td style={td}>{fmt(+r.paradas, 0)} min</td>
+                    <td style={td}>{+r.paradas > 0 ? (r.causa || "(sin causa)") : "—"}</td>
                     <td style={td}>{pct(r.disp)}</td>
                     <td style={td}>{pct(r.rend)}</td>
                     <td style={td}>{pct(r.cal)}</td>
@@ -644,6 +972,104 @@ function Historial({ maquinas, registros, eventos }) {
           ))
         )}
       </section>
+    </div>
+  );
+}
+
+/* ============================================================
+   GUÍA (manual de usuario dentro de la app)
+   ============================================================ */
+function Guia() {
+  const S = ({ titulo, children }) => (
+    <section style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 8, padding: 16 }}>
+      <h2 style={h2Style}>{titulo}</h2>
+      <div style={{ fontSize: 14, lineHeight: 1.6, color: T.ink }}>{children}</div>
+    </section>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 760 }}>
+      <S titulo="¿Qué es esta app y para qué sirve?">
+        <p style={{ margin: "6px 0" }}>
+          TPM Guayana aplica dos ideas del <strong>Mantenimiento Productivo Total (TPM)</strong>, la metodología japonesa que busca
+          cero fallas y cero pérdidas en las máquinas: <strong>medir</strong> cuánto produce realmente cada equipo, y
+          <strong> prevenir</strong> las fallas haciendo el mantenimiento a tiempo en vez de esperar a que la máquina se dañe.
+          Reparar una máquina dañada siempre cuesta más (repuestos, horas paradas, pedidos atrasados) que mantenerla a tiempo.
+        </p>
+      </S>
+
+      <S titulo="El indicador OEE, explicado simple">
+        <p style={{ margin: "6px 0" }}>
+          El <strong>OEE</strong> (Eficiencia General de los Equipos) responde una pregunta: <em>de todo lo que esta máquina
+          pudo haber producido en el turno, ¿qué porcentaje produjo de verdad?</em> Combina tres factores que se multiplican:
+        </p>
+        <p style={{ margin: "6px 0" }}>
+          <strong style={{ color: T.steel }}>Disponibilidad</strong> — ¿la máquina estuvo funcionando el tiempo que debía?
+          Cada minuto de parada no planificada la baja.<br />
+          <strong style={{ color: T.steel }}>Rendimiento</strong> — mientras funcionó, ¿trabajó a su velocidad ideal?
+          Los ritmos lentos y las microparadas la bajan.<br />
+          <strong style={{ color: T.steel }}>Calidad</strong> — de lo que produjo, ¿cuánto salió bueno?
+          Cada pieza defectuosa o retrabajada la baja.
+        </p>
+        <p style={{ margin: "6px 0" }}>
+          <strong>Cómo leer el resultado:</strong> 85 % o más es nivel de clase mundial. Entre 60 % y 85 % es un nivel
+          aceptable con margen de mejora. Menos de 60 % indica pérdidas importantes — y es el punto de partida normal de un
+          taller que recién empieza a medir: lo importante no es el número de hoy sino que la tendencia suba.
+        </p>
+      </S>
+
+      <S titulo="El semáforo de mantenimiento">
+        <p style={{ margin: "6px 0" }}>
+          Cada máquina tiene un <strong>intervalo de mantenimiento</strong>: cada cuántas horas de trabajo necesita su
+          preventivo (por ejemplo, cada 250 h). La app suma las horas que registras y compara:
+        </p>
+        <p style={{ margin: "6px 0" }}>
+          <strong style={{ color: T.ok }}>■ Verde</strong> — menos del 75 % del intervalo consumido. Todo bien.<br />
+          <strong style={{ color: T.warn }}>■ Amarillo (PRÓXIMO)</strong> — entre 75 % y 90 %. Planifica el mantenimiento:
+          consigue repuestos, decide qué día conviene parar.<br />
+          <strong style={{ color: T.danger }}>■ Rojo (URGENTE)</strong> — 90 % o más. Haz el mantenimiento cuanto antes;
+          cada hora extra aumenta el riesgo de una falla en pleno trabajo.
+        </p>
+        <p style={{ margin: "6px 0" }}>
+          Al completar el mantenimiento, márcalo con el botón <strong>"Mantenimiento hecho"</strong> en la pestaña Máquinas:
+          el contador vuelve a cero y el evento queda en el historial.
+        </p>
+      </S>
+
+      <S titulo="Rutina diaria recomendada (5 minutos al cierre del turno)">
+        <p style={{ margin: "6px 0" }}>
+          <strong>1.</strong> En <strong>Máquinas</strong>, registra las horas que trabajó cada equipo ("+ Horas trabajadas").<br />
+          <strong>2.</strong> En <strong>Registrar OEE</strong>, llena los datos del turno de cada máquina y guarda.
+          Si hubo paradas, registra la causa principal — ese dato alimenta el análisis.<br />
+          <strong>3.</strong> Si una máquina falló, regístralo en <strong>Máquinas</strong> con el botón rojo, describiendo qué pasó.<br />
+          <strong>4.</strong> Mira el <strong>Tablero</strong>: si hay alertas amarillas o rojas, planifica el mantenimiento.<br />
+          <strong>5.</strong> Una vez por semana, revisa <strong>Análisis</strong>: ¿la tendencia del OEE sube? ¿qué causa de
+          parada domina el Pareto? Esa causa es tu prioridad de la semana.
+        </p>
+      </S>
+
+      <S titulo="Diccionario rápido">
+        <p style={{ margin: "6px 0" }}>
+          <strong>Tiempo planificado:</strong> minutos que la máquina debía operar en el turno (sin contar almuerzo ni paradas programadas).<br />
+          <strong>Parada no planificada:</strong> minutos detenida sin estar previsto (avería, falta de material, corte de luz…).<br />
+          <strong>Ciclo ideal:</strong> tiempo teórico para producir una pieza en condiciones perfectas. Se cronometra una vez y no se cambia.<br />
+          <strong>MTBF:</strong> horas promedio que la máquina trabaja entre una falla y la siguiente. Más alto = más confiable.<br />
+          <strong>Pareto:</strong> análisis que ordena las causas de pérdida de mayor a menor; pocas causas suelen concentrar casi todo el problema.
+        </p>
+      </S>
+
+      <S titulo="Sobre tus datos">
+        <p style={{ margin: "6px 0" }}>
+          Los datos se guardan <strong>en este dispositivo</strong> y no necesitan internet para funcionar. Se conservan aunque
+          cierres la app o reinicies el equipo. Precaución: si borras los datos de navegación del navegador, se pierden los
+          registros — por eso conviene descargar un respaldo periódico desde <strong>Análisis → Exportar datos</strong>
+          (por ejemplo, cada viernes).
+        </p>
+      </S>
+
+      <p style={{ fontSize: 12, color: T.inkSoft, textAlign: "center", margin: "4px 0 0" }}>
+        TPM Guayana v2 · Proyecto de tesis de grado — Ingeniería Industrial, UNEG · Ciudad Guayana, Venezuela
+      </p>
     </div>
   );
 }
