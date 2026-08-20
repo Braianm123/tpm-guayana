@@ -34,8 +34,8 @@ const mono = "'IBM Plex Mono', Consolas, monospace";
    Pega aquí los DOS valores de tu proyecto de Supabase:
    Supabase → Settings → API → "Project URL" y "anon public" key.
    ============================================================= */
-const SUPABASE_URL = "PEGA_AQUI_TU_PROJECT_URL";
-const SUPABASE_ANON_KEY = "PEGA_AQUI_TU_ANON_KEY";
+const SUPABASE_URL = "https://rqesuuaojeufkhltsjbi.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJxZXN1dWFvamV1ZmtobHRzamJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxODUwMjgsImV4cCI6MjEwMjc2MTAyOH0.3xlwg5vozoafC-_0EvNtrDWAeVL2M-h2N1VvG--qRMY";
 
 const supabase = SUPABASE_URL.startsWith("https://")
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
